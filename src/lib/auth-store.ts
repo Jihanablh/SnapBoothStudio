@@ -1,89 +1,122 @@
-// ── Auth Store (localStorage based) ─────────────────────────────────────────
+// ── Auth Store — API-backed ───────────────────────────────────────────────────
+// CRITICAL FIX: useSyncExternalStore getSnapshot MUST return a cached/stable
+// reference, otherwise React detects a "new object" every render → infinite loop.
+// Solution: store the current user in a module-level variable and only update it
+// when login/logout/register is called.
+
+import { useSyncExternalStore } from "react";
+import {
+  apiLogin,
+  apiRegister,
+  saveSession,
+  clearSession,
+  getStoredUser,
+  getToken,
+  type ApiUser,
+} from "@/services/api";
 
 export type UserRole = "admin" | "user";
+export type AuthUser = ApiUser;
 
-export interface AuthUser {
-  id: string;
-  name: string;
-  email: string;
-  role: UserRole;
-}
+// ── Module-level cache ─────────────────────────────────────────────────────────
+// This is the single source of truth for the current user.
+// It is initialized once from localStorage and only mutated by login/logout.
+let _cachedUser: AuthUser | null = (() => {
+  try { return getStoredUser(); }
+  catch { return null; }
+})();
 
-const AUTH_KEY = "snapbooth.auth.v1";
-const USERS_KEY = "snapbooth.users.v1";
-
-const SEED_USERS: (AuthUser & { password: string })[] = [
-  { id: "admin-001", name: "Admin SnapBooth", email: "admin@snapbooth.com", password: "admin123", role: "admin" },
-  { id: "user-001",  name: "Demo User",       email: "user@snapbooth.com",  password: "user123",  role: "user"  },
-];
-
-function getUsersDb(): (AuthUser & { password: string })[] {
-  if (typeof window === "undefined") return SEED_USERS;
-  try {
-    const raw = localStorage.getItem(USERS_KEY);
-    if (!raw) { localStorage.setItem(USERS_KEY, JSON.stringify(SEED_USERS)); return SEED_USERS; }
-    const parsed = JSON.parse(raw) as (AuthUser & { password: string })[];
-    // ensure seed accounts always present
-    const emails = new Set(parsed.map((u) => u.email.toLowerCase()));
-    const merged = [...parsed];
-    for (const s of SEED_USERS) {
-      if (!emails.has(s.email.toLowerCase())) merged.push(s);
-    }
-    return merged;
-  } catch { return SEED_USERS; }
-}
-
-function saveUsersDb(users: (AuthUser & { password: string })[]) {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(USERS_KEY, JSON.stringify(users));
-}
-
+// ── Listeners ─────────────────────────────────────────────────────────────────
 const listeners = new Set<() => void>();
 const notifyAuth = () => listeners.forEach((l) => l());
 
+// Listen for auto-logout triggered by 401 responses
+if (typeof window !== "undefined") {
+  window.addEventListener("snapbooth:logout", () => {
+    _cachedUser = null;
+    notifyAuth();
+  });
+}
+
 export const authStore = {
+  // ── Read current user — returns the SAME cached reference ─────────────────
   getUser(): AuthUser | null {
-    if (typeof window === "undefined") return null;
+    return _cachedUser;
+  },
+
+  // ── Login via API ──────────────────────────────────────────────────────────
+  async login(
+    email: string,
+    password: string,
+  ): Promise<{ success: boolean; error?: string; user?: AuthUser }> {
     try {
-      const raw = localStorage.getItem(AUTH_KEY);
-      return raw ? (JSON.parse(raw) as AuthUser) : null;
-    } catch { return null; }
+      const res = await apiLogin(email, password);
+      if (!res.success || !res.token || !res.user) {
+        return {
+          success: false,
+          error: res.message || "Email atau password salah.",
+        };
+      }
+      saveSession(res.token, res.user);
+      _cachedUser = res.user; // update cache BEFORE notifying
+      notifyAuth();
+      return { success: true, user: res.user };
+    } catch {
+      return {
+        success: false,
+        error: "Server tidak terhubung. Pastikan backend API sedang berjalan.",
+      };
+    }
   },
 
-  login(email: string, password: string): { success: boolean; error?: string; user?: AuthUser } {
-    const users = getUsersDb();
-    const match = users.find(
-      (u) => u.email.toLowerCase() === email.toLowerCase() && u.password === password,
-    );
-    if (!match) return { success: false, error: "Email atau password salah." };
-    const user: AuthUser = { id: match.id, name: match.name, email: match.email, role: match.role };
-    localStorage.setItem(AUTH_KEY, JSON.stringify(user));
-    notifyAuth();
-    return { success: true, user };
+  // ── Register via API ───────────────────────────────────────────────────────
+  async register(
+    name: string,
+    email: string,
+    password: string,
+  ): Promise<{ success: boolean; error?: string; user?: AuthUser }> {
+    try {
+      const res = await apiRegister(name, email, password);
+      if (!res.success || !res.token || !res.user) {
+        return {
+          success: false,
+          error: res.message || "Registrasi gagal.",
+        };
+      }
+      saveSession(res.token, res.user);
+      _cachedUser = res.user; // update cache BEFORE notifying
+      notifyAuth();
+      return { success: true, user: res.user };
+    } catch {
+      return {
+        success: false,
+        error: "Server tidak terhubung. Pastikan backend API sedang berjalan.",
+      };
+    }
   },
 
-  register(name: string, email: string, password: string): { success: boolean; error?: string } {
-    const users = getUsersDb();
-    if (users.find((u) => u.email.toLowerCase() === email.toLowerCase()))
-      return { success: false, error: "Email sudah terdaftar." };
-    const newUser: AuthUser & { password: string } = {
-      id: `user-${Date.now()}`,
-      name,
-      email,
-      password,
-      role: "user",
-    };
-    saveUsersDb([...users, newUser]);
-    const user: AuthUser = { id: newUser.id, name: newUser.name, email: newUser.email, role: newUser.role };
-    localStorage.setItem(AUTH_KEY, JSON.stringify(user));
-    notifyAuth();
-    return { success: true };
-  },
-
+  // ── Logout ────────────────────────────────────────────────────────────────
   logout() {
-    if (typeof window === "undefined") return;
-    localStorage.removeItem(AUTH_KEY);
+    clearSession();
+    _cachedUser = null; // update cache BEFORE notifying
     notifyAuth();
+  },
+
+  // ── Validate token on app load ─────────────────────────────────────────────
+  async validateSession(): Promise<void> {
+    const token = getToken();
+    if (!token) {
+      _cachedUser = null;
+      notifyAuth();
+      return;
+    }
+    // If we have a stored user, keep it (optimistic). Background validate:
+    const storedUser = getStoredUser();
+    if (storedUser) {
+      _cachedUser = storedUser;
+      notifyAuth();
+    }
+    // Optionally validate with /api/auth/me — skip for now to avoid extra calls
   },
 
   subscribe(cb: () => void) {
@@ -92,12 +125,14 @@ export const authStore = {
   },
 };
 
-import { useSyncExternalStore } from "react";
-
+// ── React hooks ───────────────────────────────────────────────────────────────
 export function useAuth(): AuthUser | null {
   return useSyncExternalStore(
+    // subscribe — stable reference
     (cb) => authStore.subscribe(cb),
-    () => authStore.getUser(),
+    // getSnapshot — MUST return same reference if unchanged
+    () => _cachedUser,
+    // getServerSnapshot — for SSR
     () => null,
   );
 }

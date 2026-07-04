@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useMemo } from "react";
+import { useEffect, useState } from "react";
 import {
   CalendarClock,
   CheckCircle2,
@@ -9,64 +9,99 @@ import {
   Wallet,
   XCircle,
   Activity as ActivityIcon,
-  Plus,
   LayoutGrid,
   ImageIcon,
+  RefreshCw,
+  AlertCircle,
 } from "lucide-react";
-import { useActivities, useBookings } from "@/lib/bookings-store";
+import { apiGetDashboardStats, apiGetActivities, type DashboardStats } from "@/services/api";
 import { CountUp } from "@/components/count-up";
-import { formatIDR, getPackage, getStudio, getFrame } from "@/lib/packages";
-import { StatusBadge, PaymentBadge } from "@/components/status-badge";
+import { formatIDR } from "@/lib/packages";
 
 export const Route = createFileRoute("/admin/")({
   component: DashboardHome,
 });
 
+interface Activity {
+  id: number;
+  booking_code: string;
+  customer_name: string;
+  activity_type: string;
+  description: string;
+  created_at: string;
+}
+
 function DashboardHome() {
-  const bookings = useBookings();
-  const activities = useActivities();
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [activities, setActivities] = useState<Activity[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  const stats = useMemo(() => {
-    const total = bookings.length;
-    const pending = bookings.filter((b) => b.status === "Pending").length;
-    const confirmed = bookings.filter((b) => b.status === "Confirmed").length;
-    const completed = bookings.filter((b) => b.status === "Completed").length;
-    const cancelled = bookings.filter((b) => b.status === "Cancelled").length;
-    const revenue = bookings
-      .filter((b) => b.status !== "Cancelled")
-      .reduce((s, b) => s + b.totalPrice, 0);
-    const unpaid = bookings
-      .filter((b) => b.paymentStatus !== "Lunas" && b.status !== "Cancelled")
-      .reduce((s, b) => s + b.totalPrice, 0);
+  async function loadData() {
+    setLoading(true);
+    setError("");
+    const [statsRes, actsRes] = await Promise.all([
+      apiGetDashboardStats(),
+      apiGetActivities(),
+    ]);
+    if (statsRes.success && statsRes.data) {
+      setStats(statsRes.data);
+    } else {
+      setError(statsRes.message || "Gagal mengambil data dashboard.");
+    }
+    if (actsRes.success && actsRes.data) {
+      setActivities(actsRes.data as Activity[]);
+    }
+    setLoading(false);
+  }
 
-    // Top studio
-    const studioCounts: Record<string, number> = {};
-    bookings.forEach((b) => {
-      if (b.status !== "Cancelled") {
-        studioCounts[b.studioId] = (studioCounts[b.studioId] ?? 0) + 1;
-      }
-    });
-    const topStudioId = Object.entries(studioCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+  useEffect(() => { void loadData(); }, []);
 
-    // Top frame
-    const frameCounts: Record<string, number> = {};
-    bookings.forEach((b) => {
-      if (b.status !== "Cancelled") {
-        frameCounts[b.frameId] = (frameCounts[b.frameId] ?? 0) + 1;
-      }
-    });
-    const topFrameId = Object.entries(frameCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-widest text-primary">Overview</p>
+            <h1 className="mt-1 text-3xl font-bold">Dashboard Admin</h1>
+          </div>
+        </div>
+        {/* Skeleton cards */}
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="h-28 animate-pulse rounded-2xl border border-border bg-card/60" />
+          ))}
+        </div>
+      </div>
+    );
+  }
 
-    return { total, pending, confirmed, completed, cancelled, revenue, unpaid, topStudioId, topFrameId };
-  }, [bookings]);
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-4 py-20 text-center">
+        <AlertCircle className="h-12 w-12 text-destructive" />
+        <div>
+          <p className="font-semibold">Gagal memuat dashboard</p>
+          <p className="mt-1 text-sm text-muted-foreground">{error}</p>
+        </div>
+        <button onClick={loadData} className="flex items-center gap-2 rounded-full bg-primary/10 px-5 py-2.5 text-sm font-medium text-primary hover:bg-primary/20">
+          <RefreshCw className="h-4 w-4" /> Coba Lagi
+        </button>
+      </div>
+    );
+  }
 
-  const upcoming = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
-    return bookings
-      .filter((b) => b.bookingDate >= today && b.status !== "Cancelled")
-      .sort((a, b) => a.bookingDate.localeCompare(b.bookingDate))
-      .slice(0, 6);
-  }, [bookings]);
+  const statCards = [
+    { label: "Total Booking",    value: stats?.total_bookings ?? 0,  icon: CalendarClock,  color: "text-primary",      bg: "bg-primary/10"    },
+    { label: "Pending",          value: stats?.pending ?? 0,          icon: Clock,          color: "text-yellow-400",   bg: "bg-yellow-400/10" },
+    { label: "Confirmed",        value: stats?.confirmed ?? 0,        icon: CheckCircle2,   color: "text-blue-400",     bg: "bg-blue-400/10"   },
+    { label: "Completed",        value: stats?.completed ?? 0,        icon: TrendingUp,     color: "text-emerald-400",  bg: "bg-emerald-400/10"},
+    { label: "Cancelled",        value: stats?.cancelled ?? 0,        icon: XCircle,        color: "text-destructive",  bg: "bg-destructive/10"},
+    { label: "Total Pendapatan", value: stats?.total_revenue ?? 0,    icon: Wallet,         color: "text-primary",      bg: "bg-primary/10",   isIDR: true },
+    { label: "Belum Lunas",      value: stats?.unpaid_count ?? 0,     icon: CreditCard,     color: "text-amber-400",    bg: "bg-amber-400/10", suffix: " booking" },
+    { label: "Studio Terpopuler",value: stats?.most_booked_studio ?? "-", icon: LayoutGrid, color: "text-violet-400",  bg: "bg-violet-400/10",isText: true },
+    { label: "Frame Terpopuler", value: stats?.most_used_frame ?? "-", icon: ImageIcon,    color: "text-pink-400",     bg: "bg-pink-400/10",  isText: true },
+  ];
 
   return (
     <div className="space-y-6">
@@ -78,144 +113,70 @@ function DashboardHome() {
             Pantau seluruh aktivitas booking studio secara real-time.
           </p>
         </div>
-        <Link
-          to="/booking"
-          className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-primary to-accent px-4 py-2 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/30 hover:-translate-y-0.5 transition"
-        >
-          <Plus className="h-4 w-4" /> Tambah Booking
-        </Link>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={loadData}
+            className="flex items-center gap-2 rounded-xl border border-border bg-card/60 px-4 py-2 text-sm transition hover:border-primary/40"
+          >
+            <RefreshCw className="h-4 w-4" /> Refresh
+          </button>
+          <Link to="/booking"
+            className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-primary to-accent px-4 py-2 text-sm font-semibold text-primary-foreground">
+            + Booking Baru
+          </Link>
+        </div>
       </header>
 
-      {/* Stats grid */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard icon={CalendarClock} label="Total Booking" value={stats.total} tint="from-primary to-accent" />
-        <StatCard icon={Clock} label="Pending" value={stats.pending} tint="from-yellow-400 to-orange-500" />
-        <StatCard icon={CheckCircle2} label="Confirmed" value={stats.confirmed} tint="from-blue-400 to-cyan-500" />
-        <StatCard icon={TrendingUp} label="Completed" value={stats.completed} tint="from-emerald-400 to-teal-500" />
-        <StatCard icon={XCircle} label="Cancelled" value={stats.cancelled} tint="from-red-400 to-pink-500" />
-        <StatCard icon={Wallet} label="Estimasi Pendapatan" value={stats.revenue} tint="from-primary to-accent" isCurrency />
-        <StatCard icon={CreditCard} label="Belum Lunas" value={stats.unpaid} tint="from-pink-400 to-purple-500" isCurrency />
-        <div className="rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/15 to-accent/10 p-5">
-          <p className="text-xs uppercase tracking-widest text-muted-foreground">Rata-rata</p>
-          <p className="mt-2 text-2xl font-bold text-gradient">
-            {stats.total > 0 ? formatIDR(Math.round(stats.revenue / stats.total)) : formatIDR(0)}
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">per booking</p>
+      {/* Stat cards */}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        {statCards.map((s) => (
+          <div key={s.label} className="rounded-2xl border border-border bg-card/60 p-5">
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-muted-foreground">{s.label}</p>
+              <span className={`grid h-9 w-9 place-items-center rounded-xl ${s.bg}`}>
+                <s.icon className={`h-5 w-5 ${s.color}`} />
+              </span>
+            </div>
+            <p className={`mt-3 text-2xl font-bold ${s.color}`}>
+              {s.isText
+                ? (s.value as string)
+                : s.isIDR
+                ? formatIDR(s.value as number)
+                : <><CountUp value={s.value as number} />{s.suffix}</>
+              }
+            </p>
+          </div>
+        ))}
+      </div>
+
+      {/* Recent activities */}
+      <div className="rounded-2xl border border-border bg-card/60 p-5">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="font-semibold flex items-center gap-2">
+            <ActivityIcon className="h-4 w-4 text-primary" /> Aktivitas Terbaru
+          </h2>
+          <Link to="/admin/bookings" className="text-xs text-primary hover:underline">Lihat semua →</Link>
         </div>
-      </div>
-
-      {/* Top studio & frame */}
-      <div className="grid gap-4 sm:grid-cols-2">
-        {stats.topStudioId && (
-          <div className="rounded-2xl border border-border bg-card/60 p-5">
-            <div className="flex items-center gap-2 mb-2">
-              <LayoutGrid className="h-4 w-4 text-primary" />
-              <p className="text-xs uppercase tracking-widest text-muted-foreground">Studio Paling Populer</p>
-            </div>
-            <p className="text-lg font-bold">{getStudio(stats.topStudioId as never).emoji} {getStudio(stats.topStudioId as never).name}</p>
-            <p className="text-xs text-muted-foreground">{getStudio(stats.topStudioId as never).theme}</p>
-          </div>
-        )}
-        {stats.topFrameId && (
-          <div className="rounded-2xl border border-border bg-card/60 p-5">
-            <div className="flex items-center gap-2 mb-2">
-              <ImageIcon className="h-4 w-4 text-primary" />
-              <p className="text-xs uppercase tracking-widest text-muted-foreground">Frame Paling Dipilih</p>
-            </div>
-            <p className="text-lg font-bold">{getFrame(stats.topFrameId as never).emoji} {getFrame(stats.topFrameId as never).name}</p>
-            <p className="text-xs text-muted-foreground">Tema {getFrame(stats.topFrameId as never).badge}</p>
-          </div>
-        )}
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-[1.6fr_1fr]">
-        <section className="rounded-3xl border border-border bg-card/60 p-6">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Booking Mendatang</h2>
-            <Link to="/admin/bookings" className="text-xs text-primary hover:underline">Lihat semua →</Link>
-          </div>
-          <div className="mt-4 divide-y divide-border">
-            {upcoming.length === 0 && (
-              <p className="py-8 text-center text-sm text-muted-foreground">Belum ada booking mendatang.</p>
-            )}
-            {upcoming.map((b) => {
-              const studio = getStudio(b.studioId);
-              const frame = getFrame(b.frameId);
-              return (
-                <div key={b.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-3 sm:grid-cols-[1fr_1fr_auto]">
-                  <div className="min-w-0">
-                    <p className="truncate font-medium">{b.customerName}</p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {studio.emoji} {studio.name} · {frame.emoji} {frame.name}
-                    </p>
-                  </div>
-                  <div className="hidden text-sm sm:block">
-                    <p className="font-medium">{b.bookingDate}</p>
-                    <p className="text-xs text-muted-foreground">{b.timeSlot}</p>
-                  </div>
-                  <div className="flex shrink-0 flex-wrap items-center gap-2">
-                    <StatusBadge status={b.status} />
-                    <PaymentBadge status={b.paymentStatus} />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className="rounded-3xl border border-border bg-card/60 p-6">
-          <div className="mb-4 flex items-center gap-2">
-            <ActivityIcon className="h-4 w-4 text-primary" />
-            <h2 className="text-lg font-semibold">Aktivitas Terbaru</h2>
-          </div>
-          <ol className="relative space-y-4 border-l border-border pl-5">
-            {activities.length === 0 && (
-              <p className="text-sm text-muted-foreground">Belum ada aktivitas.</p>
-            )}
+        {activities.length === 0 ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            Belum ada aktivitas. Data akan muncul setelah user melakukan pemesanan.
+          </p>
+        ) : (
+          <div className="space-y-3">
             {activities.slice(0, 8).map((a) => (
-              <li key={a.id} className="relative">
-                <span className="absolute -left-[26px] top-1.5 h-3 w-3 rounded-full bg-gradient-to-br from-primary to-accent shadow-lg shadow-primary/40" />
-                <p className="text-sm">{a.message}</p>
-                <p className="text-xs text-muted-foreground">
-                  {new Date(a.createdAt).toLocaleString("id-ID")}
-                </p>
-              </li>
+              <div key={a.id} className="flex items-start gap-3 rounded-xl border border-border/60 bg-background/30 px-4 py-3">
+                <span className="mt-1 grid h-2 w-2 shrink-0 place-items-center rounded-full bg-primary" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium truncate">{a.description}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {new Date(a.created_at).toLocaleString("id-ID")}
+                  </p>
+                </div>
+              </div>
             ))}
-          </ol>
-        </section>
+          </div>
+        )}
       </div>
-
-      {/* AWS note */}
-      <div className="rounded-2xl border border-border bg-card/60 p-5 text-xs text-muted-foreground">
-        <span className="font-semibold text-primary">💡 Tentang Sistem:</span>{" "}
-        Sistem ini dirancang untuk dideploy pada infrastruktur AWS IaaS menggunakan EC2 sebagai virtual server. Website dapat dikembangkan dengan database, load balancer, autoscaling, dan security group untuk mendukung scalability, availability, dan keamanan akses.
-      </div>
-    </div>
-  );
-}
-
-function StatCard({
-  icon: Icon,
-  label,
-  value,
-  tint,
-  isCurrency,
-}: {
-  icon: typeof CalendarClock;
-  label: string;
-  value: number;
-  tint: string;
-  isCurrency?: boolean;
-}) {
-  return (
-    <div className="card-hover rounded-2xl border border-border bg-card/60 p-5">
-      <div className={`grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br ${tint} text-white shadow-lg shadow-primary/20`}>
-        <Icon className="h-5 w-5" />
-      </div>
-      <p className="mt-4 text-xs uppercase tracking-widest text-muted-foreground">{label}</p>
-      <p className="mt-1 text-2xl font-bold">
-        {isCurrency ? <CountUp value={value} prefix="Rp" /> : <CountUp value={value} />}
-      </p>
     </div>
   );
 }

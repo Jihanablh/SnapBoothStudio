@@ -32,23 +32,23 @@ function AdminLayout() {
   const user = useAuth();
   const navigate = useNavigate();
 
-  // Redirect to login if not logged in
+  // Redirect to login if no token exists in localStorage
+  // (auth-store already hydrates user from localStorage on module load)
   useEffect(() => {
-    if (user === null) {
-      // Check if localStorage is available (not SSR)
-      if (typeof window !== "undefined" && !localStorage.getItem("snapbooth.auth.v1")) {
-        void navigate({ to: "/login" });
-      }
+    if (typeof window === "undefined") return;
+    const hasToken = !!localStorage.getItem("snapbooth_token");
+    if (!hasToken) {
+      void navigate({ to: "/login" });
     }
-  }, [user, navigate]);
+  }, [navigate]);
 
   // Show access denied if logged in but not admin
-  if (user && user.role !== "admin") {
+  if (user !== null && user.role !== "admin") {
     return <AccessDenied />;
   }
 
-  // Show loading / redirect state
-  if (!user) {
+  // Still loading — show spinner (user is null but token may exist)
+  if (user === null) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="flex flex-col items-center gap-4">

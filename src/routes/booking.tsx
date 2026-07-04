@@ -1,20 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { z } from "zod";
-import { zodValidator } from "@tanstack/zod-adapter";
 import { useState } from "react";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { BookingForm } from "@/components/booking-form";
 import { BookingSuccessModal } from "@/components/booking-success-modal";
-import type { PackageId } from "@/lib/packages";
-
-const searchSchema = z.object({
-  pkg: z.enum(["quick-shot", "studio-hour", "full-experience"]).optional(),
-  studio: z.string().optional(),
-});
 
 export const Route = createFileRoute("/booking")({
-  validateSearch: zodValidator(searchSchema),
   component: BookingPage,
   head: () => ({
     meta: [
@@ -26,7 +17,6 @@ export const Route = createFileRoute("/booking")({
 });
 
 function BookingPage() {
-  const { pkg } = Route.useSearch();
   const [successId, setSuccessId] = useState<string | undefined>(undefined);
 
   return (
@@ -43,7 +33,6 @@ function BookingPage() {
       </section>
       <section className="mx-auto max-w-7xl px-4 pb-24 sm:px-6">
         <BookingForm
-          initialPackage={(pkg as PackageId) ?? "studio-hour"}
           onSuccess={(id) => setSuccessId(id)}
         />
       </section>

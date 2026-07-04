@@ -1,9 +1,12 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Camera, Eye, EyeOff, Mail, Lock, Sparkles, ArrowRight } from "lucide-react";
+import {
+  Camera, Eye, EyeOff, Mail, Lock, Sparkles,
+  ArrowRight, AlertCircle, Wifi, WifiOff, CheckCircle2,
+} from "lucide-react";
 import { authStore } from "@/lib/auth-store";
-import { Link } from "@tanstack/react-router";
+import { apiHealth } from "@/services/api";
 
 export const Route = createFileRoute("/login")({
   component: LoginPage,
@@ -17,12 +20,17 @@ export const Route = createFileRoute("/login")({
 
 function LoginPage() {
   const navigate = useNavigate();
+  const [tab, setTab] = useState<"login" | "register">("login");
+  const [showPw, setShowPw] = useState(false);
+
+  // Backend connectivity state
+  const [backendStatus, setBackendStatus] = useState<"checking" | "online" | "offline">("checking");
+
+  // Login state
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [tab, setTab] = useState<"login" | "register">("login");
 
   // Register state
   const [regName, setRegName] = useState("");
@@ -32,29 +40,70 @@ function LoginPage() {
   const [regError, setRegError] = useState("");
   const [regLoading, setRegLoading] = useState(false);
 
+  // Check backend connectivity on mount
+  useEffect(() => {
+    async function checkBackend() {
+      setBackendStatus("checking");
+      const res = await apiHealth();
+      setBackendStatus(res.success ? "online" : "offline");
+    }
+    void checkBackend();
+  }, []);
+
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+
+    if (!email.trim()) { setError("Email harus diisi."); return; }
+    if (!password) { setError("Password harus diisi."); return; }
+
+    if (backendStatus === "offline") {
+      setError("Server tidak terhubung. Pastikan backend API berjalan di http://localhost:4000 lalu refresh halaman ini.");
+      return;
+    }
+
     setLoading(true);
-    await new Promise((r) => setTimeout(r, 400));
-    const res = authStore.login(email, password);
+    const res = await authStore.login(email.trim(), password);
     setLoading(false);
-    if (!res.success) { setError(res.error ?? "Terjadi kesalahan."); return; }
-    void navigate({ to: res.user?.role === "admin" ? "/admin" : "/" });
+
+    if (!res.success) {
+      setError(res.error ?? "Login gagal. Periksa kembali email dan password.");
+      return;
+    }
+
+    // Redirect based on role
+    if (res.user?.role === "admin") {
+      void navigate({ to: "/admin" });
+    } else {
+      void navigate({ to: "/booking" });
+    }
   }
 
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault();
     setRegError("");
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!regName.trim()) { setRegError("Nama harus diisi."); return; }
-    if (regPw !== regPwConfirm) { setRegError("Konfirmasi password tidak cocok."); return; }
+    if (!regEmail.trim()) { setRegError("Email harus diisi."); return; }
+    if (!emailRegex.test(regEmail.trim())) { setRegError("Format email tidak valid."); return; }
     if (regPw.length < 6) { setRegError("Password minimal 6 karakter."); return; }
+    if (regPw !== regPwConfirm) { setRegError("Konfirmasi password tidak sesuai."); return; }
+
+    if (backendStatus === "offline") {
+      setRegError("Server tidak terhubung. Pastikan backend API berjalan lalu refresh halaman.");
+      return;
+    }
+
     setRegLoading(true);
-    await new Promise((r) => setTimeout(r, 400));
-    const res = authStore.register(regName, regEmail, regPw);
+    const res = await authStore.register(regName.trim(), regEmail.trim(), regPw);
     setRegLoading(false);
-    if (!res.success) { setRegError(res.error ?? "Terjadi kesalahan."); return; }
-    void navigate({ to: "/" });
+
+    if (!res.success) {
+      setRegError(res.error ?? "Registrasi gagal. Periksa kembali data yang kamu isi.");
+      return;
+    }
+    void navigate({ to: "/booking" });
   }
 
   const inputCls =
@@ -62,25 +111,25 @@ function LoginPage() {
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-12">
-      {/* Background blobs */}
+      {/* Background */}
       <div className="pointer-events-none absolute inset-0 -z-10">
         <div className="absolute -top-32 -left-32 h-96 w-96 rounded-full bg-primary/20 blur-3xl" />
         <div className="absolute -bottom-32 -right-32 h-96 w-96 rounded-full bg-accent/15 blur-3xl" />
         <div className="absolute inset-0 bg-grid opacity-40" />
       </div>
 
-      {/* Floating photo strips decoration */}
+      {/* Floating decorations */}
       {[
-        { t: "5%",  l: "-2%", r: 6,  d: 0 },
-        { t: "60%", l: "95%", r: -8, d: 0.3 },
-        { t: "80%", l: "3%",  r: 4,  d: 0.5 },
-        { t: "15%", l: "93%", r: -5, d: 0.2 },
+        { t: "5%",  l: "-2%", r: 6  },
+        { t: "60%", l: "95%", r: -8 },
+        { t: "80%", l: "3%",  r: 4  },
+        { t: "15%", l: "93%", r: -5 },
       ].map((pos, i) => (
         <motion.div
           key={i}
           initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 0.18, y: 0 }}
-          transition={{ delay: pos.d + 0.5, duration: 0.8 }}
+          animate={{ opacity: 0.15, y: 0 }}
+          transition={{ delay: i * 0.2 + 0.5, duration: 0.8 }}
           className="pointer-events-none absolute hidden lg:block"
           style={{ top: pos.t, left: pos.l, rotate: pos.r }}
         >
@@ -107,12 +156,25 @@ function LoginPage() {
           <p className="mt-2 text-sm text-muted-foreground">Studio Photobooth Rental & Self Photo Experience</p>
         </div>
 
+        {/* Backend status indicator */}
+        <div className={`mb-4 flex items-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-medium transition-all ${
+          backendStatus === "online"
+            ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+            : backendStatus === "offline"
+            ? "border-destructive/30 bg-destructive/10 text-destructive"
+            : "border-border bg-secondary/30 text-muted-foreground"
+        }`}>
+          {backendStatus === "online" && <><CheckCircle2 className="h-3.5 w-3.5 shrink-0" /> Backend API terhubung (localhost:4000)</>}
+          {backendStatus === "offline" && <><WifiOff className="h-3.5 w-3.5 shrink-0" /> Backend tidak terhubung — jalankan: <code className="ml-1 font-mono">cd backend && npm run dev</code></>}
+          {backendStatus === "checking" && <><span className="h-3 w-3 animate-spin rounded-full border border-muted-foreground/40 border-t-muted-foreground shrink-0" /> Memeriksa koneksi backend...</>}
+        </div>
+
         {/* Tab switcher */}
         <div className="mb-6 flex rounded-2xl border border-border bg-secondary/30 p-1">
           {(["login", "register"] as const).map((t) => (
             <button
               key={t}
-              onClick={() => setTab(t)}
+              onClick={() => { setTab(t); setError(""); setRegError(""); }}
               className={`flex-1 rounded-xl py-2.5 text-sm font-semibold transition-all ${
                 tab === t
                   ? "bg-gradient-to-r from-primary to-accent text-primary-foreground shadow-md shadow-primary/30"
@@ -135,14 +197,16 @@ function LoginPage() {
 
               {/* Demo hint */}
               <div className="rounded-xl border border-primary/20 bg-primary/10 px-4 py-3 text-xs text-primary">
-                <p className="font-semibold mb-1">Akun Demo:</p>
-                <p>Admin: admin@snapbooth.com / admin123</p>
-                <p>User: user@snapbooth.com / user123</p>
+                <p className="font-semibold mb-1">🔑 Akun Demo:</p>
+                <p>Admin: <code>admin@snapbooth.com</code> / <code>admin123</code></p>
+                <p>User: <code>user@snapbooth.com</code> / <code>user123</code></p>
               </div>
 
+              {/* Error */}
               {error && (
-                <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                  {error}
+                <div className="flex items-start gap-2.5 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{error}</span>
                 </div>
               )}
 
@@ -158,6 +222,7 @@ function LoginPage() {
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder="nama@email.com"
                       className={inputCls + " pl-10"}
+                      autoComplete="email"
                     />
                   </div>
                 </label>
@@ -172,6 +237,7 @@ function LoginPage() {
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="••••••••"
                       className={inputCls + " pl-10 pr-10"}
+                      autoComplete="current-password"
                     />
                     <button
                       type="button"
@@ -186,7 +252,7 @@ function LoginPage() {
 
               <button
                 type="submit"
-                disabled={loading}
+                disabled={loading || backendStatus === "offline"}
                 className="btn-glow w-full rounded-full bg-gradient-to-r from-primary to-accent py-3.5 text-sm font-semibold text-primary-foreground disabled:opacity-70"
               >
                 {loading ? (
@@ -211,13 +277,16 @@ function LoginPage() {
           ) : (
             <form onSubmit={handleRegister} className="space-y-5">
               <div>
-                <h2 className="text-xl font-bold">Buat akun baru <Sparkles className="inline h-5 w-5 text-primary" /></h2>
+                <h2 className="text-xl font-bold">
+                  Buat akun baru <Sparkles className="inline h-5 w-5 text-primary" />
+                </h2>
                 <p className="mt-1 text-sm text-muted-foreground">Daftar sebagai pelanggan studio photobooth.</p>
               </div>
 
               {regError && (
-                <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                  {regError}
+                <div className="flex items-start gap-2.5 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{regError}</span>
                 </div>
               )}
 
@@ -231,6 +300,7 @@ function LoginPage() {
                     onChange={(e) => setRegName(e.target.value)}
                     placeholder="Nama kamu"
                     className={inputCls}
+                    autoComplete="name"
                   />
                 </label>
                 <label className="block">
@@ -244,6 +314,7 @@ function LoginPage() {
                       onChange={(e) => setRegEmail(e.target.value)}
                       placeholder="nama@email.com"
                       className={inputCls + " pl-10"}
+                      autoComplete="email"
                     />
                   </div>
                 </label>
@@ -258,8 +329,10 @@ function LoginPage() {
                       onChange={(e) => setRegPw(e.target.value)}
                       placeholder="Min. 6 karakter"
                       className={inputCls + " pl-10 pr-10"}
+                      autoComplete="new-password"
                     />
-                    <button type="button" onClick={() => setShowPw((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                    <button type="button" onClick={() => setShowPw((v) => !v)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                       {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </button>
                   </div>
@@ -273,16 +346,17 @@ function LoginPage() {
                     onChange={(e) => setRegPwConfirm(e.target.value)}
                     placeholder="Ulangi password"
                     className={inputCls}
+                    autoComplete="new-password"
                   />
                 </label>
                 <div className="rounded-xl border border-border bg-secondary/30 px-4 py-2.5 text-xs text-muted-foreground">
-                  <span className="font-semibold text-foreground">Role:</span> Pelanggan (User) — hanya admin yang bisa mengakses dashboard.
+                  <span className="font-semibold text-foreground">Role:</span> Pelanggan (User) — Admin hanya dibuat oleh sistem.
                 </div>
               </div>
 
               <button
                 type="submit"
-                disabled={regLoading}
+                disabled={regLoading || backendStatus === "offline"}
                 className="btn-glow w-full rounded-full bg-gradient-to-r from-primary to-accent py-3.5 text-sm font-semibold text-primary-foreground disabled:opacity-70"
               >
                 {regLoading ? (

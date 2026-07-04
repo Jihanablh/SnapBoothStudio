@@ -1,396 +1,316 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
+import {
+  Search, Filter, Edit2, Trash2, CheckCircle2, RefreshCw, AlertCircle, Eye,
+} from "lucide-react";
 import { toast } from "sonner";
-import { Eye, Pencil, Search, Trash2, Users } from "lucide-react";
 import {
-  bookingsStore,
-  useBookings,
-  type Booking,
-  type BookingStatus,
-  type PaymentStatus,
-} from "@/lib/bookings-store";
-import {
-  FRAMES,
-  PACKAGES,
-  STUDIOS,
-  formatIDR,
-  getFrame,
-  getPackage,
-  getStudio,
-  type FrameId,
-  type PackageId,
-  type StudioId,
-  type Duration,
-} from "@/lib/packages";
-import { PaymentBadge, StatusBadge } from "@/components/status-badge";
-import { BookingDetailModal } from "@/components/booking-detail-modal";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+  apiGetBookings, apiUpdateBookingStatus, apiDeleteBooking, apiUpdateBooking,
+  type ApiBooking, type BookingFilters,
+} from "@/services/api";
+import { formatIDR } from "@/lib/packages";
+import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/admin/bookings")({
   component: BookingsPage,
+  head: () => ({ meta: [{ title: "Data Booking — Admin SnapBooth" }] }),
 });
 
-const STATUS: BookingStatus[] = ["Pending", "Confirmed", "Completed", "Cancelled"];
-const PAY: PaymentStatus[] = ["Belum Bayar", "DP", "Lunas"];
+const STATUS_OPTS = ["", "Pending", "Confirmed", "Completed", "Cancelled"];
+const PAYMENT_OPTS = ["", "Belum Bayar", "DP", "Lunas"];
+
+const statusColor: Record<string, string> = {
+  Pending:   "bg-yellow-400/15 text-yellow-300 border-yellow-400/30",
+  Confirmed: "bg-blue-400/15  text-blue-300  border-blue-400/30",
+  Completed: "bg-emerald-400/15 text-emerald-300 border-emerald-400/30",
+  Cancelled: "bg-red-400/15   text-red-300   border-red-400/30",
+};
+const payColor: Record<string, string> = {
+  "Belum Bayar": "bg-red-400/15 text-red-300 border-red-400/30",
+  DP:            "bg-amber-400/15 text-amber-300 border-amber-400/30",
+  Lunas:         "bg-emerald-400/15 text-emerald-300 border-emerald-400/30",
+};
 
 function BookingsPage() {
-  const bookings = useBookings();
-  const [q, setQ] = useState("");
-  const [status, setStatus] = useState<string>("all");
-  const [pay, setPay] = useState<string>("all");
-  const [studio, setStudio] = useState<string>("all");
-  const [frame, setFrame] = useState<string>("all");
-  const [sortAsc, setSortAsc] = useState(true);
-  const [detail, setDetail] = useState<Booking | null>(null);
-  const [edit, setEdit] = useState<Booking | null>(null);
-  const [del, setDel] = useState<Booking | null>(null);
+  const [bookings, setBookings] = useState<ApiBooking[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [filters, setFilters] = useState<BookingFilters>({});
+  const [search, setSearch] = useState("");
 
-  const filtered = useMemo(() => {
-    let list = [...bookings];
-    if (q) {
-      const t = q.toLowerCase();
-      list = list.filter(
-        (b) =>
-          b.customerName.toLowerCase().includes(t) ||
-          b.id.toLowerCase().includes(t) ||
-          b.whatsapp.includes(t),
-      );
+  // Edit modal state
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editStatus, setEditStatus] = useState("");
+  const [editPayment, setEditPayment] = useState("");
+  const [editNotes, setEditNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  // Detail modal
+  const [detailBooking, setDetailBooking] = useState<ApiBooking | null>(null);
+
+  const loadBookings = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    const res = await apiGetBookings({ ...filters, search: search || undefined });
+    if (res.success && res.data) {
+      setBookings(res.data);
+    } else {
+      setError(res.message || "Gagal mengambil data booking.");
     }
-    if (status !== "all") list = list.filter((b) => b.status === status);
-    if (pay !== "all") list = list.filter((b) => b.paymentStatus === pay);
-    if (studio !== "all") list = list.filter((b) => b.studioId === studio);
-    if (frame !== "all") list = list.filter((b) => b.frameId === frame);
-    list.sort((a, b) =>
-      sortAsc
-        ? a.bookingDate.localeCompare(b.bookingDate)
-        : b.bookingDate.localeCompare(a.bookingDate),
-    );
-    return list;
-  }, [bookings, q, status, pay, studio, frame, sortAsc]);
+    setLoading(false);
+  }, [filters, search]);
 
-  const selectCls =
-    "rounded-xl border border-border bg-input/50 px-3 py-2 text-sm outline-none focus:border-primary/60";
+  useEffect(() => { void loadBookings(); }, [loadBookings]);
 
-  return (
-    <div className="space-y-6">
-      <header>
-        <p className="text-xs font-semibold uppercase tracking-widest text-primary">Manajemen</p>
-        <h1 className="mt-1 text-3xl font-bold">Data Booking Studio</h1>
-      </header>
-
-      <div className="rounded-3xl border border-border bg-card/60 p-4">
-        <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto_auto_auto]">
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Cari nama, ID, atau WhatsApp..."
-              className="w-full rounded-xl border border-border bg-input/50 pl-10 pr-3 py-2 text-sm outline-none focus:border-primary/60"
-            />
-          </div>
-          <select className={selectCls} value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="all">Semua Status</option>
-            {STATUS.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-          <select className={selectCls} value={pay} onChange={(e) => setPay(e.target.value)}>
-            <option value="all">Semua Pembayaran</option>
-            {PAY.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-          <select className={selectCls} value={studio} onChange={(e) => setStudio(e.target.value)}>
-            <option value="all">Semua Studio</option>
-            {STUDIOS.map((s) => <option key={s.id} value={s.id}>{s.emoji} {s.name}</option>)}
-          </select>
-          <select className={selectCls} value={frame} onChange={(e) => setFrame(e.target.value)}>
-            <option value="all">Semua Frame</option>
-            {FRAMES.map((f) => <option key={f.id} value={f.id}>{f.emoji} {f.name}</option>)}
-          </select>
-          <button
-            onClick={() => setSortAsc((v) => !v)}
-            className={selectCls + " hover:border-primary/40"}
-          >
-            Tanggal {sortAsc ? "↑" : "↓"}
-          </button>
-        </div>
-      </div>
-
-      <div className="overflow-hidden rounded-3xl border border-border bg-card/60">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-secondary/60 text-xs uppercase tracking-wider text-muted-foreground">
-              <tr>
-                {[
-                  "ID",
-                  "Pelanggan",
-                  "WhatsApp",
-                  "Studio",
-                  "Frame",
-                  "Tanggal",
-                  "Jam",
-                  "Durasi",
-                  "Tamu",
-                  "Paket",
-                  "Total",
-                  "Status",
-                  "Pembayaran",
-                  "Aksi",
-                ].map((h) => (
-                  <th key={h} className="px-4 py-3 text-left font-semibold">
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={14} className="px-4 py-16 text-center text-muted-foreground">
-                    Tidak ada data booking.
-                  </td>
-                </tr>
-              )}
-              {filtered.map((b) => {
-                const studio = getStudio(b.studioId);
-                const frame = getFrame(b.frameId);
-                const durLabel = b.duration === "30min" ? "30 mnt" : b.duration === "1h" ? "1 jam" : "2 jam";
-                return (
-                  <tr key={b.id} className="transition hover:bg-secondary/40">
-                    <td className="px-4 py-3 font-mono text-xs">{b.id}</td>
-                    <td className="px-4 py-3 font-medium">{b.customerName}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{b.whatsapp}</td>
-                    <td className="px-4 py-3 text-xs">
-                      <span title={studio.name}>{studio.emoji} {studio.name.split(" ")[0]}</span>
-                    </td>
-                    <td className="px-4 py-3 text-xs">
-                      <span title={frame.name}>{frame.emoji} {frame.name.split(" ")[0]}</span>
-                    </td>
-                    <td className="px-4 py-3">{b.bookingDate}</td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">{b.timeSlot}</td>
-                    <td className="px-4 py-3 text-xs">{durLabel}</td>
-                    <td className="px-4 py-3 text-xs">
-                      <span className="flex items-center gap-1">
-                        <Users className="h-3 w-3" /> {b.guestCount}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">{getPackage(b.packageId).name}</td>
-                    <td className="px-4 py-3 font-semibold">{formatIDR(b.totalPrice)}</td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={b.status} />
-                    </td>
-                    <td className="px-4 py-3">
-                      <PaymentBadge status={b.paymentStatus} />
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-1">
-                        <IconBtn title="Detail" onClick={() => setDetail(b)}>
-                          <Eye className="h-4 w-4" />
-                        </IconBtn>
-                        <IconBtn title="Edit" onClick={() => setEdit(b)}>
-                          <Pencil className="h-4 w-4" />
-                        </IconBtn>
-                        <IconBtn title="Hapus" danger onClick={() => setDel(b)}>
-                          <Trash2 className="h-4 w-4" />
-                        </IconBtn>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <BookingDetailModal
-        booking={detail}
-        open={!!detail}
-        onOpenChange={(v) => !v && setDetail(null)}
-      />
-      <EditModal booking={edit} onClose={() => setEdit(null)} />
-      <AlertDialog open={!!del} onOpenChange={(v) => !v && setDel(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Hapus booking?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Booking {del?.id} atas nama <b>{del?.customerName}</b> akan dihapus permanen.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Batal</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                if (del) {
-                  bookingsStore.remove(del.id);
-                  toast.success(`Booking ${del.id} dihapus`);
-                  setDel(null);
-                }
-              }}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              Hapus
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
-  );
-}
-
-function IconBtn({
-  children,
-  danger,
-  title,
-  onClick,
-}: {
-  children: React.ReactNode;
-  danger?: boolean;
-  title: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      title={title}
-      onClick={onClick}
-      className={`grid h-8 w-8 place-items-center rounded-lg border border-border transition hover:-translate-y-0.5 ${
-        danger
-          ? "hover:border-destructive/60 hover:bg-destructive/10 hover:text-destructive"
-          : "hover:border-primary/60 hover:bg-primary/10 hover:text-primary"
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
-function EditModal({
-  booking,
-  onClose,
-}: {
-  booking: Booking | null;
-  onClose: () => void;
-}) {
-  const [form, setForm] = useState<Booking | null>(booking);
-  if (booking && (!form || form.id !== booking.id)) setForm(booking);
-  if (!booking || !form) return null;
-
-  const inputCls =
-    "w-full rounded-xl border border-border bg-input/50 px-3 py-2 text-sm outline-none focus:border-primary/60";
-
-  function save() {
-    if (!form) return;
-    bookingsStore.update(form.id, {
-      customerName: form.customerName,
-      whatsapp: form.whatsapp,
-      email: form.email,
-      studioId: form.studioId,
-      frameId: form.frameId,
-      bookingDate: form.bookingDate,
-      timeSlot: form.timeSlot,
-      duration: form.duration,
-      guestCount: form.guestCount,
-      packageId: form.packageId,
-      status: form.status,
-      paymentStatus: form.paymentStatus,
-      notes: form.notes,
-    });
-    toast.success(`Booking ${form.id} diperbarui`);
-    onClose();
+  async function handleUpdateStatus(b: ApiBooking) {
+    setEditingId(b.id);
+    setEditStatus(b.booking_status);
+    setEditPayment(b.payment_status);
+    setEditNotes(b.notes ?? "");
   }
 
-  return (
-    <Dialog open={!!booking} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-2xl border-border bg-card">
-        <DialogHeader>
-          <DialogTitle>Edit Booking · {form.id}</DialogTitle>
-        </DialogHeader>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <L label="Nama">
-            <input className={inputCls} value={form.customerName} onChange={(e) => setForm({ ...form, customerName: e.target.value })} />
-          </L>
-          <L label="WhatsApp">
-            <input className={inputCls} value={form.whatsapp} onChange={(e) => setForm({ ...form, whatsapp: e.target.value })} />
-          </L>
-          <L label="Studio">
-            <select className={inputCls} value={form.studioId} onChange={(e) => setForm({ ...form, studioId: e.target.value as StudioId })}>
-              {STUDIOS.map((s) => <option key={s.id} value={s.id}>{s.emoji} {s.name}</option>)}
-            </select>
-          </L>
-          <L label="Frame">
-            <select className={inputCls} value={form.frameId} onChange={(e) => setForm({ ...form, frameId: e.target.value as FrameId })}>
-              {FRAMES.map((f) => <option key={f.id} value={f.id}>{f.emoji} {f.name}</option>)}
-            </select>
-          </L>
-          <L label="Tanggal">
-            <input type="date" className={inputCls} value={form.bookingDate} onChange={(e) => setForm({ ...form, bookingDate: e.target.value })} />
-          </L>
-          <L label="Jam">
-            <input className={inputCls} value={form.timeSlot} onChange={(e) => setForm({ ...form, timeSlot: e.target.value })} />
-          </L>
-          <L label="Durasi">
-            <select className={inputCls} value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value as Duration })}>
-              <option value="30min">30 menit</option>
-              <option value="1h">1 jam</option>
-              <option value="2h">2 jam</option>
-            </select>
-          </L>
-          <L label="Jumlah Tamu">
-            <input type="number" min={1} max={6} className={inputCls} value={form.guestCount} onChange={(e) => setForm({ ...form, guestCount: Number(e.target.value) })} />
-          </L>
-          <L label="Paket">
-            <select className={inputCls} value={form.packageId} onChange={(e) => setForm({ ...form, packageId: e.target.value as PackageId })}>
-              {PACKAGES.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-          </L>
-          <L label="Status">
-            <select className={inputCls} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as BookingStatus })}>
-              {STATUS.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </L>
-          <L label="Pembayaran">
-            <select className={inputCls} value={form.paymentStatus} onChange={(e) => setForm({ ...form, paymentStatus: e.target.value as PaymentStatus })}>
-              {PAY.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </L>
-          <L label="Catatan" className="sm:col-span-2">
-            <textarea rows={2} className={inputCls} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
-          </L>
-        </div>
-        <div className="mt-4 flex justify-end gap-2">
-          <button onClick={onClose} className="rounded-full border border-border px-4 py-2 text-sm">
-            Batal
-          </button>
-          <button onClick={save} className="rounded-full bg-gradient-to-r from-primary to-accent px-5 py-2 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/30">
-            Simpan
-          </button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
+  async function saveEdit() {
+    if (!editingId) return;
+    setSaving(true);
+    const res = await apiUpdateBooking(editingId, {
+      booking_status: editStatus,
+      payment_status: editPayment,
+      notes: editNotes,
+    });
+    setSaving(false);
+    if (res.success) {
+      toast.success("Booking berhasil diperbarui.");
+      setEditingId(null);
+      void loadBookings();
+    } else {
+      toast.error(res.message || "Gagal memperbarui booking.");
+    }
+  }
 
-function L({
-  label,
-  children,
-  className = "",
-}: {
-  label: string;
-  children: React.ReactNode;
-  className?: string;
-}) {
+  async function handleDelete(b: ApiBooking) {
+    if (!confirm(`Hapus booking ${b.booking_code} atas nama ${b.customer_name}?\n\nTindakan ini tidak bisa dibatalkan.`)) return;
+    const res = await apiDeleteBooking(b.id);
+    if (res.success) {
+      toast.success(`Booking ${b.booking_code} berhasil dihapus.`);
+      void loadBookings();
+    } else {
+      toast.error(res.message || "Gagal menghapus booking.");
+    }
+  }
+
+  const inputCls = "rounded-xl border border-border bg-input/50 px-3 py-2 text-sm outline-none transition focus:border-primary/60 focus:ring-2 focus:ring-primary/15";
+
   return (
-    <label className={"block " + className}>
-      <span className="mb-1 block text-xs uppercase tracking-wider text-muted-foreground">{label}</span>
-      {children}
-    </label>
+    <div className="space-y-5">
+      <header>
+        <p className="text-xs font-semibold uppercase tracking-widest text-primary">Manajemen</p>
+        <h1 className="mt-1 text-2xl font-bold">Data Booking</h1>
+      </header>
+
+      {/* Filters */}
+      <div className="flex flex-wrap gap-3 rounded-2xl border border-border bg-card/60 p-4">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <input
+            placeholder="Cari nama, WA, kode..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className={inputCls + " pl-9 w-full"}
+          />
+        </div>
+        <select value={filters.status ?? ""} onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value || undefined }))} className={inputCls}>
+          {STATUS_OPTS.map((s) => <option key={s} value={s}>{s || "Semua Status"}</option>)}
+        </select>
+        <select value={filters.payment_status ?? ""} onChange={(e) => setFilters((f) => ({ ...f, payment_status: e.target.value || undefined }))} className={inputCls}>
+          {PAYMENT_OPTS.map((s) => <option key={s} value={s}>{s || "Semua Pembayaran"}</option>)}
+        </select>
+        <button onClick={loadBookings} className="flex items-center gap-1.5 rounded-xl border border-border px-4 py-2 text-sm hover:border-primary/40 transition">
+          <RefreshCw className="h-4 w-4" /> Refresh
+        </button>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="flex items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          <AlertCircle className="h-4 w-4" /> {error}
+        </div>
+      )}
+
+      {/* Table */}
+      <div className="overflow-x-auto rounded-2xl border border-border bg-card/60">
+        <table className="w-full min-w-[900px] text-sm">
+          <thead>
+            <tr className="border-b border-border text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {["Kode", "Pelanggan", "Studio", "Paket", "Tanggal", "Total", "Status", "Pembayaran", "Aksi"].map((h) => (
+                <th key={h} className="px-4 py-3">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              Array.from({ length: 5 }).map((_, i) => (
+                <tr key={i} className="border-b border-border/40">
+                  {Array.from({ length: 9 }).map((_, j) => (
+                    <td key={j} className="px-4 py-3">
+                      <div className="h-4 animate-pulse rounded bg-border" />
+                    </td>
+                  ))}
+                </tr>
+              ))
+            ) : bookings.length === 0 ? (
+              <tr>
+                <td colSpan={9} className="py-12 text-center text-muted-foreground">
+                  {error ? "Tidak bisa mengambil data." : "Belum ada data booking."}
+                </td>
+              </tr>
+            ) : (
+              bookings.map((b) => (
+                <tr key={b.id} className="border-b border-border/40 hover:bg-primary/5 transition">
+                  <td className="px-4 py-3">
+                    <span className="font-mono text-xs text-primary">{b.booking_code}</span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <p className="font-medium">{b.customer_name}</p>
+                    <p className="text-xs text-muted-foreground">{b.whatsapp}</p>
+                  </td>
+                  <td className="px-4 py-3 text-xs">{b.studio_name ?? "-"}</td>
+                  <td className="px-4 py-3 text-xs">{b.package_name ?? "-"}</td>
+                  <td className="px-4 py-3 text-xs">
+                    {b.booking_date}<br />
+                    <span className="text-muted-foreground">{b.start_time}</span>
+                  </td>
+                  <td className="px-4 py-3 font-semibold">{formatIDR(b.total_price)}</td>
+                  <td className="px-4 py-3">
+                    <span className={cn("rounded-full border px-2.5 py-1 text-[11px] font-bold", statusColor[b.booking_status])}>
+                      {b.booking_status}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={cn("rounded-full border px-2.5 py-1 text-[11px] font-bold", payColor[b.payment_status])}>
+                      {b.payment_status}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setDetailBooking(b)}
+                        className="rounded-lg p-1.5 text-muted-foreground hover:bg-primary/10 hover:text-primary transition"
+                        title="Detail"
+                      >
+                        <Eye className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => handleUpdateStatus(b)}
+                        className="rounded-lg p-1.5 text-muted-foreground hover:bg-primary/10 hover:text-primary transition"
+                        title="Edit"
+                      >
+                        <Edit2 className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => void handleDelete(b)}
+                        className="rounded-lg p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition"
+                        title="Hapus"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-xs text-muted-foreground">{bookings.length} data ditemukan</p>
+
+      {/* Edit Modal */}
+      {editingId !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+          <div className="w-full max-w-md rounded-3xl border border-border bg-card p-8 shadow-2xl">
+            <h3 className="text-lg font-bold mb-5">Edit Booking</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block mb-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">Status Booking</label>
+                <select value={editStatus} onChange={(e) => setEditStatus(e.target.value)} className={inputCls + " w-full"}>
+                  {STATUS_OPTS.filter(Boolean).map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block mb-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">Status Pembayaran</label>
+                <select value={editPayment} onChange={(e) => setEditPayment(e.target.value)} className={inputCls + " w-full"}>
+                  {PAYMENT_OPTS.filter(Boolean).map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block mb-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">Catatan</label>
+                <textarea
+                  rows={3}
+                  value={editNotes}
+                  onChange={(e) => setEditNotes(e.target.value)}
+                  className={inputCls + " w-full"}
+                  placeholder="Catatan tambahan..."
+                />
+              </div>
+            </div>
+            <div className="mt-6 flex gap-3">
+              <button
+                onClick={() => void saveEdit()}
+                disabled={saving}
+                className="flex-1 flex items-center justify-center gap-2 rounded-full bg-gradient-to-r from-primary to-accent py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+              >
+                {saving ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" /> : <CheckCircle2 className="h-4 w-4" />}
+                Simpan
+              </button>
+              <button
+                onClick={() => setEditingId(null)}
+                className="rounded-full border border-border px-5 py-3 text-sm font-medium hover:border-primary/40 transition"
+              >
+                Batal
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Detail Modal */}
+      {detailBooking && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+          <div className="w-full max-w-lg rounded-3xl border border-border bg-card p-8 shadow-2xl max-h-[85vh] overflow-y-auto">
+            <div className="flex items-start justify-between mb-6">
+              <div>
+                <h3 className="text-lg font-bold">Detail Booking</h3>
+                <p className="text-xs font-mono text-primary mt-1">{detailBooking.booking_code}</p>
+              </div>
+              <button onClick={() => setDetailBooking(null)} className="text-muted-foreground hover:text-foreground">✕</button>
+            </div>
+            <dl className="space-y-3 text-sm">
+              {[
+                ["Nama", detailBooking.customer_name],
+                ["WhatsApp", detailBooking.whatsapp],
+                ["Email", detailBooking.email || "-"],
+                ["Studio", detailBooking.studio_name || "-"],
+                ["Paket", detailBooking.package_name || "-"],
+                ["Frame", detailBooking.frame_name || "-"],
+                ["Tanggal", detailBooking.booking_date],
+                ["Jam", detailBooking.start_time],
+                ["Durasi", `${detailBooking.duration_minutes} menit`],
+                ["Jumlah Orang", String(detailBooking.people_count)],
+                ["Add-on", (() => { try { return JSON.parse(detailBooking.addons).join(", ") || "-"; } catch { return "-"; } })()],
+                ["Total", formatIDR(detailBooking.total_price)],
+                ["Status", detailBooking.booking_status],
+                ["Pembayaran", detailBooking.payment_status],
+                ["Catatan", detailBooking.notes || "-"],
+                ["Dibuat", new Date(detailBooking.created_at).toLocaleString("id-ID")],
+              ].map(([l, v]) => (
+                <div key={l} className="flex gap-4">
+                  <dt className="w-28 shrink-0 text-muted-foreground">{l}</dt>
+                  <dd className="font-medium">{v}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
